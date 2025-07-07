@@ -1,41 +1,63 @@
-import random
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import os
+import random
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils import executor
+from aiogram.dispatcher.filters import CommandStart
+from dotenv import load_dotenv
+
+load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
+bot = Bot(token=TOKEN)
+dp = Dispatcher(bot)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [['🎲 Бросить кубик']]
-    await update.message.reply_text(
-        "Привет! Давай сыграем в кубики. Нажми кнопку 👇",
-        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
-    )
+# Кнопка
+keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+keyboard.add(KeyboardButton("🎲 Бросить кубик"))
 
-async def roll_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_roll = random.randint(1, 6)
-    bot_roll = random.randint(1, 6)
+# Храним состояния (временно)
+user_states = {}
 
-    text = (
-        f"Ты бросил: 🎲 {user_roll}\n"
-        f"Я бросил: 🤖 {bot_roll}\n\n"
-    )
+@dp.message_handler(CommandStart())
+async def start(msg: types.Message):
+    await msg.answer("Привет! Нажми кнопку, чтобы сыграть в кубики 🎲", reply_markup=keyboard)
 
-    if user_roll > bot_roll:
-        text += "🎉 Ты победил!"
-    elif user_roll < bot_roll:
-        text += "😈 Я победил!"
+@dp.message_handler(lambda m: m.text == "🎲 Бросить кубик")
+async def play_dice(msg: types.Message):
+    user_id = msg.from_user.id
+    await msg.answer("Мой ход... 🎲")
+
+    # Бот кидает кубик
+    bot_dice = await bot.send_dice(msg.chat.id, emoji="🎲")
+    bot_value = bot_dice.dice.value
+
+    user_states[user_id] = {
+        "bot": bot_value,
+        "waiting_user": True
+    }
+
+    await msg.answer("Теперь твой ход! Просто отправь 🎲 (встроенный кубик в Telegram)")
+
+@dp.message_handler(content_types=types.ContentType.DICE)
+async def user_dice(msg: types.Message):
+    user_id = msg.from_user.id
+    state = user_states.get(user_id)
+
+    if not state or not state.get("waiting_user"):
+        await msg.reply("Сначала нажми кнопку 🎲, чтобы начать игру.")
+        return
+
+    user_value = msg.dice.value
+    bot_value = state["bot"]
+
+    # Определим победителя
+    if user_value > bot_value:
+        result = "🎉 Ты победил!"
+    elif user_value < bot_value:
+        result = "😈 Я победил!"
     else:
-        text += "😐 Ничья!"
+        result = "🤝 Ничья!"
 
-    await update.message.reply_text(text)
-
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Text(["🎲 Бросить кубик"]), roll_dice))
-    print("Бот запущен...")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+    await msg.answer(f"Результат:\nТы: {user_value} | Я: {bot_value}\n{result}")
+    user_states[user_id]["waiting_user"] = False
